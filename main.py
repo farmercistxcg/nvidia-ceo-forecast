@@ -48,14 +48,18 @@ QUANTILES = [0.05, 0.25, 0.5, 0.75, 0.95]
 Z_IN = 0.67449
 
 # Tuned on the practice cases + the walk-forward backtest (hourly checkpoints
-# over the practice window). Practice loss 0.256143, backtest 0.285884
-# (house baseline 0.363589 / 0.3895).
+# over the practice window). Practice loss 0.254123, backtest 0.284780
+# (house baseline 0.363589 / 0.3895). Entry 3 change vs entry 2: sigma_cap
+# 0.01 -> 0.005. The cap only bites on the jumpiest markets, whose
+# winsorized sigma otherwise inflates their bands for hours; it never
+# worsened any of the 6 practice cases or any of the 21 backtest
+# checkpoints (gains concentrated in p03 / checkpoints 10, 12, 13).
 PARAMS = {
     "win": 720,           # minutes of recent history the volatility window covers
     "win_cap": 0.02,      # winsorize |1-min moves| at this size before averaging
     "k_sigma": 1.25,      # sigma = k_sigma * winsorized mean |1-min move|
     "sigma_floor": 0.0002,
-    "sigma_cap": 0.01,
+    "sigma_cap": 0.005,
     "z_out": 2.2,         # outer-quantile z (5%/95%), fatter than Gaussian
     "sum_w": 0.8,         # fraction of the cross-market sum gap closed
     "sum_pow": 2.0,       # sum gap allocated in proportion to price**sum_pow
