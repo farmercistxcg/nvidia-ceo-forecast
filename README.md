@@ -13,16 +13,25 @@ minute of the 4 hours after a checkpoint, as five quantiles (5%, 25%, 50%, 75%,
 
 Per market, from its own 72 hours of 1-minute Yes prices:
 
-- **Median:** the last price. A spike in the very last minute is pulled back a
-  little (1-minute spikes in this event revert fast), and the medians are eased
-  toward a cross-market total of 1 — the 24 outcomes are mutually exclusive,
-  so when the Yes prices sum above 1 they tend to come down, and vice versa.
+- **Median:** the last price, with two adjustments:
+  - *Jump bounce:* a big 1-minute move (|d| > 0.02) is pulled back by 80%
+    of the move, ramped in linearly over the first 120 minutes of the
+    horizon. Measured on the practice history, 1-minute jumps revert
+    (slope about −0.4 on the mean move, more on the median); the ramp
+    reflects that the give-back takes tens of minutes, not one.
+  - *Sum easing:* the medians are eased toward a cross-market total of 1 —
+    the 24 outcomes are mutually exclusive, so when the Yes prices sum above
+    1 they tend to come down, and vice versa. The gap is allocated in
+    proportion to each market's price *squared*, so the big markets carry
+    most of it.
 - **Spread:** a per-market sigma from the *winsorized* mean |1-minute move|
   over the last 12 hours, scaled. Winsorizing (not RMS) is the key choice:
   these prices are mostly flat with rare enormous jumps (a market listing at
   0.48 and collapsing), and an RMS/EWMA of squared moves lets one jump inflate
-  the band for hours. Quantiles are `median + z_tau * sigma * sqrt(h)` with a
-  fatter outer z (2.2) for the 5%/95% levels, clamped to [0, 1], monotone,
+  the band for hours. Quantiles are `median +/- z_tau * sigma * sqrt(240) *
+  (h/240)**0.65` with a fatter outer z (2.2) for the 5%/95% levels: the
+  h-step spread grows more slowly than sqrt(h) at short horizons, and the
+  0.65 exponent fits the practice window better. Clamped to [0, 1], monotone,
   rounded to 6 decimals.
 
 ## Validation (practice cases p00–p05, scored against Polymarket history)
@@ -30,16 +39,16 @@ Per market, from its own 72 hours of 1-minute Yes prices:
 | | loss | median error | 90% coverage |
 |---|---:|---:|---:|
 | House baseline | 0.363589 | 0.767503 | 0.949642 |
-| **This entry** | **0.266697** | **0.746485** | **0.898047** |
+| **This entry** | **0.256143** | **0.707011** | **0.876660** |
 
 Better than the baseline on every one of the six practice cases
-(p00 0.427 vs 0.536, p01 0.310 vs 0.380, p02 0.339 vs 0.408, p03 0.257 vs 0.369,
-p04 0.204 vs 0.299, p05 0.119 vs 0.238). Also tuned on a walk-forward backtest
-(hourly checkpoints over the practice window): 0.294 vs the baseline's 0.389.
+(p00 0.432 vs 0.536, p01 0.288 vs 0.380, p02 0.298 vs 0.408, p03 0.254 vs 0.369,
+p04 0.200 vs 0.299, p05 0.117 vs 0.238). Also tuned on a walk-forward backtest
+(hourly checkpoints over the practice window): 0.286 vs the baseline's 0.389.
 
 - Determinism: two runs on all six cases are byte-identical.
-- Runtime: ~0.33 s for all six cases together (~0.05 s per case; cap is 8 s).
-- Output size: 223–289 KB per case (cap is 1 MiB). All cases valid.
+- Runtime: ~0.30 s for all six cases together (~0.05 s per case; cap is 8 s).
+- Output size: 221–291 KB per case (cap is 1 MiB). All cases valid.
 
 ## Run locally
 
