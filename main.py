@@ -17,12 +17,16 @@ Model (per market, from its own 72h of 1-minute Yes prices):
     prices are mostly flat with rare enormous jumps (a market listing at 0.48
     and collapsing), and an RMS/EWMA of squared moves lets one jump inflate
     the band for hours. Quantiles are median +/- z_tau * sigma * sqrt(240) *
-    (h/240)**0.65, with a fatter outer z (2.2) for the 5%/95% levels: the
-    bands grow faster than sqrt(h) at short horizons is wrong here -- the
-    empirical h-step spread grows more slowly than sqrt(h) at short h and
-    the 0.65 exponent fits the practice window better. Everything is clamped
-    to [0, 1], monotone, rounded to 6 decimals, and deterministic: a pure
-    function of the input.
+    (h/240)**alpha, with a fatter outer z (2.2) for the 5%/95% levels and
+    narrower inner z (0.6 down, 0.5 up) for the 25%/75% levels: the inner
+    bands were systematically too wide at the Gaussian 0.67449, and narrowing
+    them (more on the up side, where jumps revert harder) gains on both
+    practice and backtest. The down-side h-exponent is 0.60, the up-side
+    0.65: the bands grow faster than sqrt(h) at short horizons is wrong here
+    -- the empirical h-step spread grows more slowly than sqrt(h) at short h
+    and the 0.60/0.65 exponents fit the practice window better. Everything is
+    clamped to [0, 1], monotone, rounded to 6 decimals, and deterministic: a
+    pure function of the input.
 
 Things tried and rejected (practice loss + walk-forward backtest, both had
 to improve): EWMA-of-squares volatility (jump-dominated), a jump-rate
@@ -30,7 +34,9 @@ component (bands too wide), spike pullback toward a 30-60 minute anchor
 (no gain / hurts -- only the last 1-minute jump carries signal), 6h-level
 reversion and shrinkage toward the field mean for the median (hurts),
 level-dependent median drift (hurts), asymmetric up/down quantile z
-(hurts), signed down/up volatility (hurts), per-market empirical h-step
+(hurts in the round-4 combinations tried -- except the narrower inner-z
+split, 0.6 down / 0.5 up, that entry 4 adopts, which gains on both
+practice and backtest), signed down/up volatility (hurts), per-market empirical h-step
 quantiles (much worse -- the tail estimates are too noisy and regime-bound),
 and momentum terms (hurts badly).
 
@@ -45,15 +51,16 @@ INPUT_DIR = os.environ.get("MAKEFUN_INPUT_DIR", "/input")
 OUTPUT_DIR = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
 
 QUANTILES = [0.05, 0.25, 0.5, 0.75, 0.95]
-Z_IN = 0.67449
 
 # Tuned on the practice cases + the walk-forward backtest (hourly checkpoints
-# over the practice window). Practice loss 0.254123, backtest 0.284780
-# (house baseline 0.363589 / 0.3895). Entry 3 change vs entry 2: sigma_cap
-# 0.01 -> 0.005. The cap only bites on the jumpiest markets, whose
-# winsorized sigma otherwise inflates their bands for hours; it never
-# worsened any of the 6 practice cases or any of the 21 backtest
-# checkpoints (gains concentrated in p03 / checkpoints 10, 12, 13).
+# over the practice window). Practice loss 0.251760, backtest 0.282383
+# (house baseline 0.363589 / 0.3895). Entry 4 change vs entry 3: narrower
+# inner quantiles (z_in 0.67449 -> 0.6 down / 0.5 up), down-side h-exponent
+# 0.65 -> 0.60, jump bounce 0.8 -> 0.85. The inner-z narrowing alone gains
+# on both practice and backtest across the whole 0.4-0.6 range (a systematic
+# effect, not a single-knob fluke); the combined variant is better than
+# entry 3 on ALL 6 practice cases and on 19/21 backtest checkpoints (worst
+# single checkpoint +0.0012, best -0.0052).
 PARAMS = {
     "win": 720,           # minutes of recent history the volatility window covers
     "win_cap": 0.02,      # winsorize |1-min moves| at this size before averaging
@@ -61,10 +68,13 @@ PARAMS = {
     "sigma_floor": 0.0002,
     "sigma_cap": 0.005,
     "z_out": 2.2,         # outer-quantile z (5%/95%), fatter than Gaussian
+    "z_in_d": 0.6,        # inner-quantile z, down side (25%)
+    "z_in_u": 0.5,        # inner-quantile z, up side (75%)
     "sum_w": 0.8,         # fraction of the cross-market sum gap closed
     "sum_pow": 2.0,       # sum gap allocated in proportion to price**sum_pow
-    "alpha": 0.65,        # h-exponent of the quantile offsets (0.5 = sqrt)
-    "jump_bounce": 0.8,   # fraction of a big 1-min jump pulled back
+    "alpha_d": 0.60,      # h-exponent of the down-side quantile offsets
+    "alpha_u": 0.65,      # h-exponent of the up-side quantile offsets
+    "jump_bounce": 0.85,  # fraction of a big 1-min jump pulled back
     "jump_thr": 0.02,     # only bounce 1-min jumps bigger than this
     "jump_phase": 120,    # minutes to ramp the bounce in over
 }
@@ -98,7 +108,6 @@ def _price6(v):
 def forecast_market(st, horizon, sum_gap, x_total, pow_total, p):
     rows = []
     z_out = p["z_out"]
-    alpha = p["alpha"]
     sq240 = math.sqrt(240.0)
     # The sum adjustment is allocated in proportion to price**sum_pow: bigger
     # markets carry more of the gap between the cross-market total and 1.
@@ -110,13 +119,14 @@ def forecast_market(st, horizon, sum_gap, x_total, pow_total, p):
         med = st["x"] - (h / horizon) * p["sum_w"] * sum_gap * sum_share * x_total
         if jump:
             med -= jb * jump * min(1.0, h / phase)
-        sd = st["sigma_eff"] * sq240 * (h / 240.0) ** alpha
+        sd_d = st["sigma_eff"] * sq240 * (h / 240.0) ** p["alpha_d"]
+        sd_u = st["sigma_eff"] * sq240 * (h / 240.0) ** p["alpha_u"]
         row = [
-            _price6(med - z_out * sd),
-            _price6(med - Z_IN * sd),
+            _price6(med - z_out * sd_d),
+            _price6(med - p["z_in_d"] * sd_d),
             _price6(med),
-            _price6(med + Z_IN * sd),
-            _price6(med + z_out * sd),
+            _price6(med + p["z_in_u"] * sd_u),
+            _price6(med + z_out * sd_u),
         ]
         for j in range(1, 5):
             if row[j] < row[j - 1]:
